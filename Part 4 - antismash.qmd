@@ -1,0 +1,101 @@
+---
+title: "Part 4 - Antismash Overview"
+author: "Sevan Esaian"
+format: pdf
+editor: visual
+---
+
+## Antismash analysis
+
+```{r}
+library(dplyr)
+library(pheatmap)
+library(tidyr)
+library(vegan)
+```
+
+```{r}
+as_over <- read.csv("antismash_summary_overview.csv")
+
+subset_as_over <- as_over[, c("full_taxa", "Output")]
+
+count_as_over <- subset_as_over %>%
+  group_by(full_taxa, Output) %>%
+  summarise(Count = n())
+
+unique_combinations_as_over <- expand.grid(full_taxa = unique(count_as_over$full_taxa), Output = unique(count_as_over$Output))
+
+
+count_as_over_zero <- left_join(unique_combinations_as_over, count_as_over, by = c("full_taxa", "Output")) %>%
+  mutate(Count = replace_na(Count, 0))
+
+
+pivot_as_over <- count_as_over_zero %>%
+  pivot_wider(names_from=Output, values_from=Count)
+
+rownames_pivot_as_over <- column_to_rownames(pivot_as_over, var = "full_taxa")
+
+numeric_pivot_as_over <- rownames_pivot_as_over[, sapply(rownames_pivot_as_over, is.numeric)]
+
+as_over_row <- hclust(dist(numeric_pivot_as_over))
+as_over_col <- hclust(dist(t(numeric_pivot_as_over)))
+
+custom_palette_as <- colorRampPalette(c("white", "red4"))(100)
+pheatmap(numeric_pivot_as_over,
+         cluster_rows = as_over_row,
+         cluster_cols = as_over_col,
+         cutree_rows = 2,
+         cutree_cols = 2,
+         na_color = "white",
+         color = custom_palette_as)
+```
+
+```{r}
+subset_as_ra <- as_over[, c("full_taxa", "Output", "Calculation")]
+
+summarized_as_ra <- subset_as_ra %>%
+  group_by(full_taxa, Output) %>%
+  summarise(Sum_Calculation = sum(Calculation), .groups = "drop")
+
+unique_as_ra <- expand.grid(full_taxa = unique(summarized_as_ra$full_taxa), Output = unique(summarized_as_ra$Output))
+
+
+count_as_over_zero <- left_join(unique_as_ra, summarized_as_ra, by = c("full_taxa", "Output")) %>%
+  mutate(Sum_Calculation = replace_na(Sum_Calculation, 0))
+
+pivot_as_zero <- pivot_wider(count_as_over_zero, names_from=Output, values_from=Sum_Calculation)
+
+pivot_as_zero_nmds <- pivot_as_zero[, -1]
+as_bray <- vegdist(pivot_as_zero_nmds, distance="bray")
+nmds_bray_as <- metaMDS(as_bray) 
+
+#Calculate ANOSIM (Analysis of Similarity)
+anosim_cds_CAZyme <- anosim(pivot_subset_cds_nmds_row, taxa.CAZyme$Phylum)
+#R = 0.6765 & P = 0.001
+
+#Calculate betadisper (beta dispersion)
+betadisper_cds_CAZyme <- betadisper(subset_cds_bray, taxa.CAZyme$Phylum)
+
+#PERMANOVA
+permanova_cds_CAZyme <- adonis(subset_cds_bray ~ taxa.CAZyme$Phylum)
+#R^2= 0.45184 P<0.001
+
+#PERMDISP
+permdisp_cds <- permutest(betadisper_cds_CAZyme)
+#P<0.001
+
+
+
+
+
+
+
+#write.csv(nmds_bray_as$points, "NMDS coordinates antismash output all taxa.csv")
+
+NMDS.coords.as <- read.csv("NMDS coordinates antismash output all taxa.csv")
+
+NMDS.coords.as %>%
+  ggplot(aes(x=NMDS1, NMDS2, color=Phylum)) +
+  geom_point(size=3) +
+  theme_bw()
+```

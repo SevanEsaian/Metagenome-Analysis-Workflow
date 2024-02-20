@@ -1,0 +1,268 @@
+---
+title: "Chapter 2 - Part 2 - Assessing %CDS and RPKM of CAZymes"
+author: "Sevan Esaian"
+format: pdf
+editor: visual
+---
+
+## Analysis Idea
+
+Count data can only get you so far. You need to contextualize gene presence by normalizing it to all the other genes in that metagenome. For example, if bin 1 has 1,000 genes and 1 CAZyme versus bin 2 having 1,000 genes and 3 CAZymes, that's a 3x difference in CAZymes per capita.\
+What I will do below is calculate the percentage per CAZyme per bin to the total number of predicted genes per bin. Then, I will look at the community composition pre and post screening like in did in part 1. Post-Screening includes only keeping those taxa with an n \>= 3, and giant kelp specific CAZymes. That way, we can see how much of a difference that makes in CAZyme composition per bin normalized to predicted genes.
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#Import libraries 
+library(dplyr)
+library(vegan)
+library(tidyr)
+library(tibble)
+library(ggplot2)
+library(pheatmap)
+```
+
+```{r}
+#| warning: false
+#| message: false
+#dbCAN_count_complete - this dataframe containst the following column headers:
+  #bin_id, CAZyme, CAZyme_Count_perbin
+    #First, I will run an NMDS with all taxa and all CAZymes. No subsetting, then, we will tweak the analysis like we did in part 1.
+
+#Import the checkM dataframe
+checkM_genes <- read.csv("MasterList_checkM_bin_stats.tree.csv")
+
+#group the dbCAN_count_complete & checkM dataframes by "bin_id"
+CAZyme_checkM <- merge(dbCAN_count_complete, checkM_genes, by="bin_id")
+
+#Calculate % CDS per CAZyme per bin
+CAZyme_checkM_cds <- CAZyme_checkM %>%
+  mutate(percent_cds = 100 * (CAZyme_Count_perbin / predicted_genes))
+
+#subset the following column: bin_id, CAZyme, and percent_cds
+subset_percent_cds <- CAZyme_checkM_cds %>%
+  select(bin_id, CAZyme, percent_cds)
+
+#set the CAZyme information to the subsetquent column headers
+subset_percent_cds_wide <- pivot_wider(subset_percent_cds, names_from=CAZyme, values_from=percent_cds)
+
+#get rid of column 1 and run the nmds
+subset_percent_cds_nmds <- subset_percent_cds_wide[, -1]
+
+percent_cds_bray <- vegdist(subset_percent_cds_nmds, distance="bray")
+percent_cds_bray[is.na(percent_cds_bray)] <- 0
+nmds_bray <- metaMDS(percent_cds_bray) 
+#write.csv(nmds_bray$points, "nmds_cds_all_taxa_and_cazymes.csv")
+```
+
+```{r}
+#Calculate ANOSIM (Analysis of Similarity)
+anosim_cds <- anosim(subset_percent_cds_nmds, taxa$Phylum)
+#R = 0.5361 & P = 0.001
+
+#Calculate betadisper (beta dispersion)
+betadisper_cds <- betadisper(percent_cds_bray, taxa$Phylum)
+
+#PERMANOVA
+permanova_cds <- adonis(percent_cds_bray ~ taxa$Phylum)
+#R^2= 0.35596 P<0.001
+
+#PERMDISP
+permdisp_cds <- permutest(betadisper_cds)
+#P<0.001
+```
+
+So clearly, there's a significant difference in Phylum level patterns across these taxa when considering the composition and % of genome occupied by these CAZymes. Let's plot it.
+
+```{r}
+nmds_coords_cds <- read.csv("nmds_cds_all_taxa_and_cazymes.csv")
+nmds_coords_cds %>%
+  ggplot(aes(x=NMDS1, NMDS2, color=Phylum)) +
+  geom_point(size=3) +
+  theme_bw()
+```
+
+Subset the Giant Kelp Relevant CAZymes. Rerun the NMDS and stats. I will subset out the lower quantity taxa at the end but for now, I'm keeping it in the ordination in case we want to conduct follow-up analyses.
+
+```{r}
+#| warning: false
+subset_percent_cds_CAZyme <- subset(subset_percent_cds, CAZyme=="PL5" | CAZyme=="PL6" | CAZyme=="PL7" | CAZyme=="PL14" | CAZyme=="PL15" | CAZyme=="PL17" | CAZyme=="PL18" | CAZyme=="PL31" | CAZyme=="PL34" | CAZyme=="PL39" | CAZyme=="PL41" | CAZyme=="CBM9" | CAZyme=="AA10" | CAZyme=="CBM2" | CAZyme=="CBM6" | CAZyme=="CBM3" | CAZyme=="CBM64" | CAZyme=="CBM73" | CAZyme=="CE14" | CAZyme=="GH19" | CAZyme=="GH23" | CAZyme=="GH46" | CAZyme=="CBM2" | CAZyme=="CBM5" | CAZyme=="GH107" | CAZyme=="GH141" | CAZyme=="GH168" | CAZyme=="GH29" | CAZyme=="GH95" | CAZyme=="GH128" | CAZyme=="GH158" | CAZyme=="GH17" | CAZyme=="GH64" | CAZyme=="GH81" | CAZyme=="GH3" | CAZyme=="GH168" | CAZyme=="GH30" | CAZyme=="GH102" | CAZyme=="GH103" | CAZyme=="GH104" | CAZyme=="GH171" | CAZyme=="GH25" | CAZyme=="GH73" | CAZyme=="CBM20" | CAZyme=="CBM26"| CAZyme=="CBM34")
+
+subsetted_cds_CAZyme <- merge(subset_percent_cds_CAZyme, taxa, by="bin_id")
+
+#Now that we have our CAZyme subsetted dataframe, let's run the NMDS
+
+pivot_subset_cds <- pivot_wider(subsetted_cds_CAZyme, names_from=CAZyme, values_from=percent_cds)
+
+pivot_subset_cds_nmds <- pivot_subset_cds[, -(1:7)]
+pivot_subset_cds_nmds_row <- pivot_subset_cds_nmds[-52, ] #needed to get rid of row 52 because all 0's based on CAZyme subset.
+subset_cds_bray <- vegdist(pivot_subset_cds_nmds_row, distance="bray")
+nmds_bray_subset <- metaMDS(subset_cds_bray) 
+#write.csv(nmds_bray_subset$points, "CAZyme subsetted nmds coords.csv")
+```
+
+```{r}
+#Run some stats
+taxa.CAZyme <- taxa[-52, ]
+#Calculate ANOSIM (Analysis of Similarity)
+anosim_cds_CAZyme <- anosim(pivot_subset_cds_nmds_row, taxa.CAZyme$Phylum)
+#R = 0.6765 & P = 0.001
+
+#Calculate betadisper (beta dispersion)
+betadisper_cds_CAZyme <- betadisper(subset_cds_bray, taxa.CAZyme$Phylum)
+
+#PERMANOVA
+permanova_cds_CAZyme <- adonis(subset_cds_bray ~ taxa.CAZyme$Phylum)
+#R^2= 0.45184 P<0.001
+
+#PERMDISP
+permdisp_cds <- permutest(betadisper_cds_CAZyme)
+#P<0.001
+
+NMDS.coords.subset <- read.csv("CAZyme subsetted nmds coords.csv")
+
+NMDS.coords.subset.CAZyme <- subset(NMDS.coords.subset, Phylum == "Acinobacteriota" | Phylum =="Bacteroidota" | Phylum == "Planctomycetota" | Phylum =="Proteobacteria" | Phylum=="Verrucomicrobiota")
+
+NMDS.coords.subset.CAZyme %>%
+  ggplot(aes(x=NMDS1, NMDS2, color=Phylum)) +
+  geom_point(size=3) +
+  theme_bw()
+```
+
+It's quite interesting that there isn't as clear of a difference when dealing with giant kelp specific CAZymes. Perhaps this makes sense because they all live on giant kelp so they require similar CAZymes? That would mean non giant kelp specific CAZymes are what mostly drive differences in CAZyme associated genomic composition? With that being said, the stats technically claim a significant difference though it's not immediately obvious.
+
+\<Insert here your workflow for calculating RPKM & TPM\>
+
+```{r}
+#| warning: false
+cov <- read.csv("logRPKM_logTPM_CAZyme.csv")
+#merge with taxa
+cov_taxa <- merge(cov, taxa, by="bin_id")
+cov_taxa_CAZyme <- merge(cov_taxa, Carb.Meta, by="CAZyme")
+
+#subset the CAZymes and taxa you're interested in
+cov_taxa_subset <- subset(cov_taxa_CAZyme, Phylum == "Acinobacteriota" | Phylum =="Bacteroidota" | Phylum == "Planctomycetota" | Phylum =="Proteobacteria" | Phylum=="Verrucomicrobiota")
+
+cov_taxa_CAZyme_subset <- subset(cov_taxa_subset, CAZyme=="PL5" | CAZyme=="PL6" | CAZyme=="PL7" | CAZyme=="PL14" | CAZyme=="PL15" | CAZyme=="PL17" | CAZyme=="PL18" | CAZyme=="PL31" | CAZyme=="PL34" | CAZyme=="PL39" | CAZyme=="PL41" | CAZyme=="CBM9" | CAZyme=="AA10" | CAZyme=="CBM2" | CAZyme=="CBM6" | CAZyme=="CBM3" | CAZyme=="CBM64" | CAZyme=="CBM73" | CAZyme=="CE14" | CAZyme=="GH19" | CAZyme=="GH23" | CAZyme=="GH46" | CAZyme=="CBM2" | CAZyme=="CBM5" | CAZyme=="GH107" | CAZyme=="GH141" | CAZyme=="GH168" | CAZyme=="GH29" | CAZyme=="GH95" | CAZyme=="GH128" | CAZyme=="GH158" | CAZyme=="GH17" | CAZyme=="GH64" | CAZyme=="GH81" | CAZyme=="GH3" | CAZyme=="GH168" | CAZyme=="GH30" | CAZyme=="GH102" | CAZyme=="GH103" | CAZyme=="GH104" | CAZyme=="GH171" | CAZyme=="GH25" | CAZyme=="GH73" | CAZyme=="CBM20" | CAZyme=="CBM26"| CAZyme=="CBM34")
+
+#create a new column with the code that you want for your pheatmap axis
+cov_taxa_CAZyme_subset$full_taxa <- paste(
+  cov_taxa_CAZyme_subset$Phylum,
+  cov_taxa_CAZyme_subset$Class,
+  cov_taxa_CAZyme_subset$Order,
+  cov_taxa_CAZyme_subset$Family,
+  cov_taxa_CAZyme_subset$Genus,
+  cov_taxa_CAZyme_subset$Species,
+  cov_taxa_CAZyme_subset$bin_id,
+  sep = "_"
+)
+
+RPKM_pheatmap_setup <- cov_taxa_CAZyme_subset[, c("full_taxa", "CAZyme_Full_Label", "log2RPKM")]
+
+#need to sum up your RPKM values
+RPKM_pheatmap_setup_sum <- RPKM_pheatmap_setup %>%
+  group_by(full_taxa, CAZyme_Full_Label) %>%
+  summarise(log2RPKM = sum(log2RPKM, na.rm = TRUE))
+
+#check all combinations
+complete_combination <- expand.grid(full_taxa = unique(RPKM_pheatmap_setup_sum$full_taxa),
+                           CAZyme_Full_Label = unique(RPKM_pheatmap_setup_sum$CAZyme_Full_Label))
+
+RPKM_pheatmap_set_sum_zeros <- merge(complete_combination, RPKM_pheatmap_setup_sum, 
+                               by = c("full_taxa", "CAZyme_Full_Label"), 
+                               all.x = TRUE) %>%
+                          replace_na(list(log2RPKM = 0))
+
+#pivot yoru dataframe
+pivot_RPKM_pheatmap_setup <- RPKM_pheatmap_set_sum_zeros %>%
+  pivot_wider(names_from = CAZyme_Full_Label, values_from = log2RPKM)
+
+
+#set-up your dataframe for pheatmap plotting
+rownames_RPKM_pheatmap_setup <- column_to_rownames(pivot_RPKM_pheatmap_setup, var = "full_taxa")
+
+
+numeric_RPKM_pheatmap_setup <- rownames_RPKM_pheatmap_setup[, sapply(rownames_RPKM_pheatmap_setup, is.numeric)]
+
+row_dend_RPKM <- hclust(dist(numeric_RPKM_pheatmap_setup))
+col_dend_RPKM <- hclust(dist(t(numeric_RPKM_pheatmap_setup)))
+
+custom_palette <- colorRampPalette(c("pink", "red3", "black"))(100)
+data_with_NA <- replace(rownames_RPKM_pheatmap_setup, rownames_RPKM_pheatmap_setup == 0, NA)
+pheatmap(data_with_NA,
+         cluster_rows = row_dend_RPKM,
+         cluster_cols = col_dend_RPKM,
+         cutree_rows = 2,
+         cutree_cols = 2,
+         color = custom_palette,
+         na_color = "white")
+```
+
+Recreate heatmap this time using log2 TPM
+
+```{r}
+TPM_pheatmap_setup <- cov_taxa_CAZyme_subset[, c("full_taxa", "CAZyme_Full_Label", "log2TPM")]
+
+#need to sum up your TPM values
+TPM_pheatmap_setup_sum <- TPM_pheatmap_setup %>%
+  group_by(full_taxa, CAZyme_Full_Label) %>%
+  summarise(log2TPM = sum(log2TPM, na.rm = TRUE))
+
+#check all combinations
+complete_combination_TPM <- expand.grid(full_taxa = unique(TPM_pheatmap_setup_sum$full_taxa),
+                           CAZyme_Full_Label = unique(TPM_pheatmap_setup_sum$CAZyme_Full_Label))
+
+TPM_pheatmap_set_sum_zeros <- merge(complete_combination_TPM, TPM_pheatmap_setup_sum, 
+                               by = c("full_taxa", "CAZyme_Full_Label"), 
+                               all.x = TRUE) %>%
+                          replace_na(list(log2TPM = 0))
+
+#pivot yoru dataframe
+pivot_TPM_pheatmap_setup <- TPM_pheatmap_set_sum_zeros %>%
+  pivot_wider(names_from = CAZyme_Full_Label, values_from = log2TPM)
+
+
+#set-up your dataframe for pheatmap plotting
+rownames_TPM_pheatmap_setup <- column_to_rownames(pivot_TPM_pheatmap_setup, var = "full_taxa")
+
+
+numeric_TPM_pheatmap_setup <- rownames_TPM_pheatmap_setup[, sapply(rownames_RPKM_pheatmap_setup, is.numeric)]
+
+row_dend_TPM <- hclust(dist(numeric_TPM_pheatmap_setup))
+col_dend_TPM <- hclust(dist(t(numeric_TPM_pheatmap_setup)))
+
+custom_palette <- colorRampPalette(c("pink", "red3", "black"))(100)
+data_with_NA_TPM <- replace(rownames_TPM_pheatmap_setup, rownames_TPM_pheatmap_setup == 0, NA)
+pheatmap(data_with_NA_TPM,
+         cluster_rows = row_dend_TPM,
+         cluster_cols = col_dend_TPM,
+         cutree_rows = 2,
+         cutree_cols = 2,
+         color = custom_palette,
+         na_color = "white")
+```
+
+Plot regular heatmaps for each of these (RPKM & TPM)
+
+```{r}
+RPKM_pheatmap_set_sum_zeros %>%
+  ggplot(aes(y=full_taxa, x=CAZyme_Full_Label, fill=log2RPKM)) +
+  geom_tile(color="gray90") +
+  coord_equal() +
+  theme(axis.text.x = element_text(angle=90, hjust=1)) +
+  scale_fill_gradientn(
+    colours = c("white", "red", "black"),
+    values = c(0, 0.5, 1)) 
+```
+
+```{r}
+TPM_pheatmap_set_sum_zeros %>%
+  ggplot(aes(y=full_taxa, x=CAZyme_Full_Label, fill=log2TPM)) +
+  geom_tile(color="gray90") +
+  coord_equal() +
+  theme(axis.text.x = element_text(angle=90, hjust=1)) +
+  scale_fill_gradientn(
+    colours = c("white", "red", "black"),
+    values = c(0, 0.5, 1)) 
+```

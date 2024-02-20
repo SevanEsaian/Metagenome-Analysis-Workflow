@@ -1,0 +1,409 @@
+---
+title: "Chapter 2 - Part 1 - Count data visualization"
+author: "Sevan Esaian"
+format: pdf
+editor: visual
+---
+
+## Question
+
+When considering CAZymes that targeting kelp-specific carbohydrates (both intra and extracellular), to what extent does count vary by CAZymes per MAG (Taxa) and Taxa per CAZymes?
+
+**Data wrangling step 1**
+
+Unfortunately, the dbcan4 output is a mess. After running each dRep bin through dbCAN, I converted each bins dbsub.out file to a dbsut.txt file. Then, I ran the following command on each dbCAN_subfam cell in excel:\
+=IF(ISNUMBER(SEARCH("\_",A1)),LEFT(A1,SEARCH(" \_",A1)-1,ALL)
+
+What this command does is remove all underscores afterthe dbCAN_subfam which you do not need.\
+For example:\
+GH3_e123 becomes GH3. This is what we need for the count data.
+
+```{r}
+#| echo: false
+# Import necessary libraries count dataframe
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(pheatmap)
+library(dendextend)
+library(RColorBrewer)
+library(tibble)
+dbCAN_unedited <- read.csv("dbCAN_count_perbin_needs_wrangling.csv")
+
+```
+
+My dataframe currently has 2 columns: bin_id and CAZyme. I want to add a column, CAZyme_Count_perbin, which sums up each bin_id per CAZyme.
+
+```{r}
+#| echo: false
+#| message: false
+# Group by bin_id and CAZyme, and compute count
+dbCAN_counted <- dbCAN_unedited %>%
+  group_by(bin_id, CAZyme) %>%
+  summarise(CAZyme_Count_perbin = n())
+```
+
+To accurately visualize presence/absence & counts of CAZymes, we need to account for CAZymes not found in all bins. The following adds 0's for each CAZyme per bin that is not originally found in that bin.
+
+```{r}
+# First, generate every combination of bin_id & CAZyme
+bin_id_CAZyme_combo <- expand.grid(
+  bin_id = unique(dbCAN_counted$bin_id),
+  CAZyme = unique(dbCAN_counted$CAZyme)
+)
+
+#Second, merge with the original dataframe by filling missing values with 0
+dbCAN_count_complete <- merge(bin_id_CAZyme_combo, dbCAN_counted, 
+                        by = c("bin_id", "CAZyme"), all.x = TRUE) %>% 
+  replace(is.na(.), 0)
+```
+
+Now that we have a dataframe containing CAZyme counts with presence/absence information, we can merge it with the taxa metadata. Then, we can look at some broad patterns.
+
+```{r}
+taxa <- read.csv("dereplicated_bins_taxa_metadata.csv")
+#merge the 2 dataframes using the bin_id column
+merged_CAZyme_counts_taxa <- merge(dbCAN_count_complete, taxa)
+```
+
+The first figure I want to look at answers the following question:
+
+1\) To what extent does CAZyme abundance and diversity per phylum differ? Class? Order? Family?
+
+To answer this question, we need to create a new dataframe that includes abundance and diversity info per bin.
+
+```{r}
+#Compute abundance and diversity of CAZyme's per bin_id
+sum_CAZyme_metrics <- merged_CAZyme_counts_taxa %>%
+  group_by(bin_id) %>%
+  summarise(
+    CAZyme_Abundance = sum(CAZyme_Count_perbin),
+    CAZyme_Diversity = sum(CAZyme_Count_perbin > 0)
+  )
+
+sum_CAZyme_metrics_taxa <- merge(taxa, sum_CAZyme_metrics, by = "bin_id")
+```
+
+What is the strength of the relationship between CAZyme abundance and diversity?
+
+```{r}
+#| warning: false
+#run the regression stats
+reg.CAZyme.metrics <- lm(data=sum_CAZyme_metrics_taxa, CAZyme_Abundance~CAZyme_Diversity)
+summary(reg.CAZyme.metrics)
+#Adj. R^2 = 0.9213, p < 0.0001
+
+#plot the regression
+rsquared_value <- 0.92
+sum_CAZyme_metrics_taxa %>%
+  ggplot(aes(x=CAZyme_Abundance, y=CAZyme_Diversity, color=Phylum)) +
+  geom_point(size=3) +
+  geom_smooth(method="lm", se=TRUE, color="black", size=.5) +
+  labs(title = "Correlation between CAZyme abundance and diversity across all bins",
+       x="CAZyme Abundance",
+       y= "CAZyme Diversity") +
+  theme_bw() +
+  annotate("text", x=20, y=75, label = bquote(paste("R"^2 == .(format(rsquared_value, digits = 2))))) +
+  annotate("text", x=20, y=70, label = "P < 0.0001") +
+  theme(axis.text = element_text(size =16),
+        axis.title = element_text(size=18))
+
+```
+
+![CAZyme Abundance and Diversity is significantly positively correlated across all bins and their respective CAZymes.](Figures_For_Ch2/Taxa%20and%20Kelp%20Specific%20Regression.jpg){fig-align="left" width="206.97in" height="10in"}
+
+Now, let's look at CAZyme abundance and diversity distributions for each Phylum.
+
+```{r}
+#run the anova and tukey hsd
+CAZyme_abundance_anova <- aov(data=sum_CAZyme_metrics_taxa, CAZyme_Abundance~Phylum)
+#P < 0.0001 indicating significant difference across Pylum
+tukey_CAZyme_abundance <- TukeyHSD(CAZyme_abundance_anova)
+#Noteworthy pair-wise significant differences for CAZyme Abundance: 
+  #Proteobacteria-Bacteroidota P<0.0001
+  #Verrucomicrobiota-Bacteroidota P<0.01
+  #Verrucomicrobiota-Planctomycetota P<0.05
+  #Proteobacteria-Planctomycetota <0.001
+sum_CAZyme_metrics_taxa %>%
+  ggplot(aes(x=Phylum, y=CAZyme_Abundance)) +
+  geom_boxplot() +
+  geom_jitter() +
+  theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  labs(title = "Data distribution of CAZyme Abundance across all bins per Phylum",
+       x="Bacterial Phylum",
+       y= "CAZyme Abundance") +
+  theme(axis.text = element_text(size =16),
+        axis.title = element_text(size=18))
+```
+
+```{r}
+#run the anova and tukey hsd
+CAZyme_diversity_anova <- aov(data=sum_CAZyme_metrics_taxa, CAZyme_Diversity~Phylum)
+#P < 0.0001 indicating significant difference across Phylum
+tukey_CAZyme_diversity <- TukeyHSD(CAZyme_diversity_anova)
+#Noteworthy pair-wise significant differences for CAZyme Abundance: 
+  #Proteobacteria-Bacteroidota P<0.001
+  #Verrucomicrobiota-Bacteroidota P<0.05
+  #Proteobacteria-Planctomycetota P<0.05
+  #Verrucomicrobiota-Planctomycetota P<0.05
+sum_CAZyme_metrics_taxa %>%
+  ggplot(aes(x=Phylum, y=CAZyme_Diversity)) +
+  geom_boxplot() +
+  geom_jitter() +
+  theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  labs(title = "Data distribution of CAZyme Diversity across all bins per Phylum",
+       x="Bacterial Phylum",
+       y= "CAZyme Diversity") +
+  theme(axis.text = element_text(size =16),
+        axis.title = element_text(size=18))
+```
+
+There's a few issues with this broad analysis.\
+1) There are a lot of "1-off" taxa. This provides us with no statistical strength.\
+2) There are a lot of different CAZymes; some of which are not relevant to giant kelp.
+
+I'm going to keep the Phyla with at least a n=3, and I'm going to keep CAZymes that are either extra or intracellular relevant to giant kelp.
+
+Then, we'll re-run the analysis + visualize some heatmaps.
+
+```{r}
+#First, figure out which taxa are "1-off" and subset them out/ remove
+phylum_unique_counts <- merged_CAZyme_counts_taxa %>%
+  group_by(Phylum) %>%
+  summarise(
+    Count = n()
+  ) %>%
+  ungroup()
+#The following Phyla have >= 3 bins each
+#Actinobacteriota, Bacteroidota, Planctomycetota, Proteobacteria, Verrucomicrobiota.
+
+Major_Phyla_CAZyme_metrics <- subset(merged_CAZyme_counts_taxa, Phylum == "Acinobacteriota" | Phylum =="Bacteroidota" | Phylum == "Planctomycetota" | Phylum =="Proteobacteria" | Phylum=="Verrucomicrobiota")
+```
+
+Now that we have our subsetted "dominant phyla" dataframe, we need to complete a further subset. We are only going to concern ourselves with proven kelp-relevant CAZymes. Here's a list of the CAZymes we want:
+
+Alginate: PL5, PL6, PL7, PL14, PL15, PL17, PL18, PL31, PL34, PL39, PL41
+
+Cellulose: CBM9, AA10, CBM2, CBM6, CBM3, CBM64
+
+Chitin: CBM73, CE14, GH19, GH23, GH46, CBM2, CBM5
+
+Fucoidan: GH107, GH141, GH168, GH29, GH95
+
+Laminarin: GH128, GH158, GH17, GH64, GH81, GH3, GH168, GH30
+
+Peptidoglycan: GH102, GH103, GH104, GH171, GH25, GH73
+
+Starch: CBM20, CBM26, CBM34
+
+```{r}
+#Subset based on the CAZymes listed above
+#note to self - the code below is kind of a disaster. 
+Major_Phyla_Kelp_CAZyme_Count <- subset(Major_Phyla_CAZyme_metrics, CAZyme=="PL5" | CAZyme=="PL6" | CAZyme=="PL7" | CAZyme=="PL14" | CAZyme=="PL15" | CAZyme=="PL17" | CAZyme=="PL18" | CAZyme=="PL31" | CAZyme=="PL34" | CAZyme=="PL39" | CAZyme=="PL41" | CAZyme=="CBM9" | CAZyme=="AA10" | CAZyme=="CBM2" | CAZyme=="CBM6" | CAZyme=="CBM3" | CAZyme=="CBM64" | CAZyme=="CBM73" | CAZyme=="CE14" | CAZyme=="GH19" | CAZyme=="GH23" | CAZyme=="GH46" | CAZyme=="CBM2" | CAZyme=="CBM5" | CAZyme=="GH107" | CAZyme=="GH141" | CAZyme=="GH168" | CAZyme=="GH29" | CAZyme=="GH95" | CAZyme=="GH128" | CAZyme=="GH158" | CAZyme=="GH17" | CAZyme=="GH64" | CAZyme=="GH81" | CAZyme=="GH3" | CAZyme=="GH168" | CAZyme=="GH30" | CAZyme=="GH102" | CAZyme=="GH103" | CAZyme=="GH104" | CAZyme=="GH171" | CAZyme=="GH25" | CAZyme=="GH73" | CAZyme=="CBM20" | CAZyme=="CBM26"| CAZyme=="CBM34")
+```
+
+Now that we have our desired subset, I can run the regression and boxplots again along with heatmaps.
+
+```{r}
+#compute abundance and diversity once again using this new dataframe
+sum_CAZyme_metrics_kelp <- Major_Phyla_Kelp_CAZyme_Count %>%
+  group_by(bin_id) %>%
+  summarise(
+    CAZyme_Abundance = sum(CAZyme_Count_perbin),
+    CAZyme_Diversity = sum(CAZyme_Count_perbin > 0)
+  )
+
+#subset taxa dataframe
+dominant_taxa <- subset(taxa, Phylum == "Acinobacteriota" | Phylum =="Bacteroidota" | Phylum == "Planctomycetota" | Phylum =="Proteobacteria" | Phylum=="Verrucomicrobiota")
+
+#merge both dataframes together
+CAZyme_sum_kelp_taxa <- merge(dominant_taxa, sum_CAZyme_metrics_kelp, by = "bin_id")
+```
+
+Now that we have our taxa and kelp relevant dataframe, we can re-plot the regression and boxplots to see how thing's have changed. This can help temper our expectations for the count-specific heatmap.
+
+```{r}
+#| warning: false
+#run the regression stats
+reg.CAZyme.metrics.taxa.kelp <- lm(data=CAZyme_sum_kelp_taxa, CAZyme_Abundance~CAZyme_Diversity)
+summary(reg.CAZyme.metrics.taxa.kelp)
+#Adj. R^2 = 0.8293, p < 0.0001
+
+#plot the regression
+rsquared_value <- 0.83
+CAZyme_sum_kelp_taxa %>%
+  ggplot(aes(x=CAZyme_Abundance, y=CAZyme_Diversity, color=Phylum)) +
+  geom_point(size=3) +
+  geom_smooth(method="lm", se=TRUE, color="black", size=.5) +
+  labs(title = "Correlation between kelp relevant CAZyme abundance and diversity across all taxa > 3",
+       x="CAZyme Abundance",
+       y= "CAZyme Diversity") +
+  theme_bw() +
+  annotate("text", x=5, y=25, label = bquote(paste("R"^2 == .(format(rsquared_value, digits = 2))))) +
+  annotate("text", x=5, y=20, label = "P < 0.0001") +
+  theme(axis.text = element_text(size =16),
+        axis.title = element_text(size=18))
+#Note - most proteobacteria are aggregated to the left and bacteroidota are mostly aggregated to the right. This is pretty interesting as a distinction that we'll further explore with %CDS and coverage information (i.e., RPKM & TPM)
+```
+
+```{r}
+#run the anova and tukey hsd
+CAZyme_kelp_taxa_abundance_anova <- aov(data=CAZyme_sum_kelp_taxa, CAZyme_Abundance~Phylum)
+#P < 0.0001 indicating significant difference across Phylum
+tukey_CAZyme_kelp_taxa_abundance <- TukeyHSD(CAZyme_kelp_taxa_abundance_anova)
+#Noteworthy pair-wise significant differences for CAZyme Abundance: 
+  #Planctomycetota-Bacteroidota P<0.005
+  #Proteoacteria-Bacteroidota P<0.0001
+  #Verrucomicrobiota-Bacteroidota P<0.0005
+CAZyme_sum_kelp_taxa %>%
+  ggplot(aes(x=Phylum, y=CAZyme_Abundance)) +
+  geom_boxplot() +
+  geom_jitter() +
+  theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  labs(title = "Data distribution of kelp relevant CAZyme Abundance across all Phyla > 3",
+       x="Bacterial Phylum",
+       y= "CAZyme Abundance") +
+  theme(axis.text = element_text(size =16),
+        axis.title = element_text(size=18))
+```
+
+```{r}
+#run the anova and tukey hsd
+CAZyme_kelp_taxa_diversity_anova <- aov(data=CAZyme_sum_kelp_taxa, CAZyme_Diversity~Phylum)
+#P < 0.0001 indicating significant difference across Phylum
+tukey_CAZyme_kelp_taxa_diversity <- TukeyHSD(CAZyme_kelp_taxa_diversity_anova)
+#Noteworthy pair-wise significant differences for CAZyme Abundance: 
+  #Planctomycetota-Bacteroidota P<0.005
+  #Proteoacteria-Bacteroidota P<0.0001
+  #Verrucomicrobiota-Bacteroidota P<0.0005
+CAZyme_sum_kelp_taxa %>%
+  ggplot(aes(x=Phylum, y=CAZyme_Diversity)) +
+  geom_boxplot() +
+  geom_jitter() +
+  theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  labs(title = "Data distribution of kelp relevant CAZyme Diversity across all Phyla > 3",
+       x="Bacterial Phylum",
+       y= "CAZyme Diversity") +
+  theme(axis.text = element_text(size =16),
+        axis.title = element_text(size=18))
+```
+
+Now, let's generate some heatmaps of the count data; such that, we look at kelp relevant CAZymes counts per taxa with \> 3 representatives. There's a bit of a labelling issue here. Reordering the CAZymes based on intracellular vs extracellular targets is a bit of a pain. Instead, I'm going to incorporate the name into the axis-label. For example: IE (Intracellular) Chitin GH1 will become IE_Chitin_GH1.
+
+```{r}
+#Create a new column called full_taxa and combined the taxa name with bin id
+Major_Phyla_Kelp_CAZyme_Count$full_taxa <- paste(
+  Major_Phyla_Kelp_CAZyme_Count$Phylum,
+  Major_Phyla_Kelp_CAZyme_Count$Class,
+  Major_Phyla_Kelp_CAZyme_Count$Order,
+  Major_Phyla_Kelp_CAZyme_Count$Family,
+  Major_Phyla_Kelp_CAZyme_Count$Genus,
+  Major_Phyla_Kelp_CAZyme_Count$Species,
+  Major_Phyla_Kelp_CAZyme_Count$bin_id,
+  sep = "_"
+)
+
+#import carbohydrate metadata
+Carb.Meta <- read.csv("Carbohydrate_Target_Metadata.csv")
+
+#combined carbohydrate metadata with Major_Phyla_Kelp_CAZyme_Count
+Major_Phyla_Kelp_CAZyme_Count_Meta <- merge(Major_Phyla_Kelp_CAZyme_Count, Carb.Meta, by="CAZyme")
+
+Major_Phyla_Kelp_CAZyme_Count_Meta %>%
+  ggplot(aes(y=full_taxa, x=CAZyme_Full_Label, fill=CAZyme_Count_perbin)) +
+  geom_tile(color="gray90") +
+  coord_equal() +
+  theme(axis.text.x = element_text(angle=90, hjust=1)) +
+  scale_fill_gradientn(
+    colours = c("white", "red", "black"),
+    values = c(0, 0.5, 1)) 
+```
+
+The output figure above does not look good. That's ok, just run the command in the console and convert to a 20x20 pdf to view it nicely. There are a few observations worth noting here.\
+1) There is no single CAZyme found in every single bin. This is interesting; such that, there is no core or pan-CAZyme that is kelp-relevant (analogy to pan-genome).
+
+2\) There is no single dreplicated bin that has every single CAZyme in it's genome. This is interesting; such that, there is no perfect carbohydrate catabolizer.
+
+To get a better understanding of which CAZymes and taxa have counts that are similar, I will use the pheatmap function (with some cladograms).
+
+```{r}
+#We need to convert the CAZyme_Full_Label column into the column names. The dataframe needs the first column to be full_taxa, subsequent columns to be CAZyme_Full_Label, and each cell should be filled by CAZyme_Count_perbin
+
+subset_for_pheatmap <- Major_Phyla_Kelp_CAZyme_Count_Meta %>%
+  select(full_taxa, CAZyme_Full_Label, CAZyme_Count_perbin)
+
+#pivot the dataframe into a wide format; such that, CAZyme_Full_Label becomes the subsequent column headers 
+
+pivot_CAZyme_Count_for_pheatmap <- subset_for_pheatmap %>%
+  pivot_wider(names_from = CAZyme_Full_Label, values_from = CAZyme_Count_perbin)
+
+#set-up your dataframe for pheatmap plotting
+rownames_CAZyme_pheatmap <- column_to_rownames(pivot_CAZyme_Count_for_pheatmap, var = "full_taxa")
+
+
+numeric_CAZyme_Count <- rownames_CAZyme_pheatmap[, sapply(rownames_CAZyme_pheatmap, is.numeric)]
+
+row_dend <- hclust(dist(numeric_CAZyme_Count))
+col_dend <- hclust(dist(t(numeric_CAZyme_Count)))
+
+custom_palette <- colorRampPalette(c("white", "red", "black"))(100)
+pheatmap(rownames_CAZyme_pheatmap,
+         cluster_rows = row_dend,
+         cluster_cols = col_dend,
+         cutree_rows = 2,
+         cutree_cols = 2,
+         color = custom_palette)
+```
+
+What I learned from the figure above is that when it comes to count data:\
+1) Cellvibrionaceae bin144 from mature only co-assembly has distinct CAZyme counts from all other bins.
+
+2\) There is a somewhat strict aggregation of CAZyme abundance based on taxa. For example Saprospiraceae mostly aggregate together; as do Rhodobacteraceae, and Pirellulaceae.
+
+3\) CAZymes also somewhat aggregate based on intra vs extracellular. The most distinct cazyme is intracellular chitin GH23 (left) and intracellular peptidoglycan GH73 + cellulose CBM6 (right).
+
+It will be interesting to compare this information to the rpkm information. Before I do that, I also want to make some boxplots where the x-axis is CAZyme target, the y-axis is count, and the fill is count per bin. The question this will answer is: to what extent does CAZyme target significantly vary when considering all bins?
+
+```{r}
+#Create a dataframe that has CAZyme labels but just the target.
+Major_Phyla_Kelp_CAZyme_Count_Meta$CAZyme_code <- paste(
+  Major_Phyla_Kelp_CAZyme_Count_Meta$Source,
+  Major_Phyla_Kelp_CAZyme_Count_Meta$Carbohydrate,
+  sep = "_"
+)
+
+#run the anova and tukey hsd
+CAZyme_count_anova <- aov(data=Major_Phyla_Kelp_CAZyme_Count_Meta, CAZyme_Count_perbin~CAZyme_code)
+#P < 0.0001 indicating significant difference across Phylum
+tukey_CAZyme_count <- TukeyHSD(CAZyme_count_anova)
+#Noteworthy pair-wise significant differences across CAZymes: 
+  #Chitin-Alginate P<0.0005
+  #Peptidoglycan-Alginate P<0.0001
+  #Chitin-Fucoidan P<0.01
+  #Peptidoglycan-Fucoidan P<0.0005
+  #Starch-Fucoidan P<0.05
+  #Chitin-Cellulose P<0.005
+  #Peptidoglycan-Cellulose P<0.0001
+  #Laminarin-Chitin P<0.0005
+  #Starch-Chitin P<0.0001
+  #Peptidoglycan-Laminarin P<0.0001
+  #Starch-Peptidoglycan P<0.0001
+
+#plot boxplots where the x-axis is the CAZyme_code and the y-axis is count (across all bins)
+Major_Phyla_Kelp_CAZyme_Count_Meta %>%
+  ggplot(aes(x=CAZyme_code, y=CAZyme_Count_perbin)) +
+  geom_boxplot() +
+  theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  labs(title = "Data distribution of kelp relevant CAZymes across all Phyla > 3",
+       x="CAZyme Category",
+       y= "Count per bin") +
+  theme(axis.text = element_text(size =16),
+        axis.title = element_text(size=18))
+
+#Ok yikes - this wasn't the best idea because of how heavily weighted it is towards 0.
+```

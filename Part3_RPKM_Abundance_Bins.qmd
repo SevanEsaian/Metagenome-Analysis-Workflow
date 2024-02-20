@@ -1,0 +1,68 @@
+---
+title: "Part3_RPKM_Bins"
+author: "Sevan Esaian"
+format: pdf
+editor: visual
+---
+
+## Analysis Idea
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#Import libraries 
+library(dplyr)
+library(vegan)
+library(tidyr)
+library(tibble)
+library(ggplot2)
+library(pheatmap)
+```
+
+```{r}
+#| warning: false
+bin_idx <- read.csv("idx_stats_all_bins.csv")
+
+subset_bin_idx <- bin_idx[, c("full_taxa", "Sample_ID", "Log2RPKM")]
+
+pivot_subset_bin_idx <- subset_bin_idx %>%
+  pivot_wider(names_from=Sample_ID, values_from=Log2RPKM)
+
+rownames_pivot_bin_idx <- column_to_rownames(pivot_subset_bin_idx, var = "full_taxa")
+
+numeric_pivot_bin_idx <- rownames_pivot_bin_idx[, sapply(rownames_pivot_bin_idx, is.numeric)]
+
+bin_idx_row_dend_RPKM <- hclust(dist(numeric_pivot_bin_idx))
+bin_idx_col_dend_RPKM <- hclust(dist(t(numeric_pivot_bin_idx)))
+
+pheatmap(numeric_pivot_bin_idx,
+         cluster_rows = bin_idx_row_dend_RPKM,
+         cluster_cols = bin_idx_col_dend_RPKM,
+         cutree_rows = 2,
+         cutree_cols = 2,
+         na_color = "white")
+```
+
+```{r}
+subset_bin_ra <- bin_idx[, c("full_taxa", "Sample_ID", "PERC_RA_RPKM")]
+
+pivot_subset_bin_ra <- subset_bin_ra %>%
+  pivot_wider(names_from=Sample_ID, values_from=PERC_RA_RPKM)
+
+rownames_pivot_bin_ra <- column_to_rownames(pivot_subset_bin_ra, var = "full_taxa")
+
+numeric_pivot_bin_ra <- rownames_pivot_bin_ra[, sapply(rownames_pivot_bin_ra, is.numeric)]
+
+bin_ra_row_dend_RPKM <- hclust(dist(numeric_pivot_bin_ra))
+bin_ra_col_dend_RPKM <- hclust(dist(t(numeric_pivot_bin_ra)))
+
+custom_palette_ra <- colorRampPalette(c("white", "red3", "black"))(100)
+pheatmap(numeric_pivot_bin_ra,
+         cluster_rows = bin_ra_row_dend_RPKM,
+         cluster_cols = bin_ra_col_dend_RPKM,
+         cutree_rows = 2,
+         cutree_cols = 2,
+         color=custom_palette_ra,
+         na_color = "white")
+```
